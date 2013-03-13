@@ -1,0 +1,139 @@
+/*
+  This is an automata definition written in AutodefPHP which parses correctly a source file written
+in AutodefPHP.
+*/
+// -- The automata starts here, and it's called "automata"
+[AUTOMATA:automata]
+/*
+  You must put the global flags and options here. The list of available options is:
+  
+  ignore_case -> "true" if the tokens, strings and regular expressions must match upper or lower
+    case as the same. Defaults to "false".
+  char_mode -> "true" if the input stream is composed of characters, "false" if it's a list of numbers.
+    Defaults to "true".
+  utf8 -> "true" if the input stream must be parsed assuming UTF-8 encoding. "false" assumes ISO-8859-1.
+    Defaults to "true".
+  ignore_whitespace -> "true" if the spaces found in the input stream are ignored when matching strings,
+    regexes or tokens. Defaults to "true".
+  token_func -> The name of a valid PHP function which will return the valid tokens for the automata.
+    This only has sense when "char_mode" is "false". Defaults to null.
+  single_lines -> "true" if the end-of-line markers are significant. Defaults to "false".
+*/
+%ignore_case = false;
+%char_mode = true;
+%utf8 = true;
+%ignore_whitespace = false;
+/*
+  The tokens are defined here. You can define a token using a regular expression, but you can also
+define a token based in another by enclosing the token name between curly braces ('{' and '}'). The
+format of a token definition is an ALL-CAPS identifier, followed by a "=" sign and then the regular
+expression in PCRE-compatible format. No modifiers are accepted, though, like "i" for case ignore
+or "s" for single-line. These are dynamically added when needed, depending on the global settings
+above.
+*/
+[TOKENS]
+  SPC = \s                                  // A single space
+  SPCS = {SPC}+                             // Multiple spaces
+  SPCZ = {SPC}*                             // Multiple or none spaces
+  IDENT = [A-Za-z_]\w*                      // Standard identifier
+  STATE_NAME = (?:[a-z]\w*|\d+)             // State name when creating a state
+  END_STATE = END                           // You must epsilon-transition to this state in orde to make a state as final.
+  STATE_LABEL = (?:&[a-z]\w*|\d+)           // State name as a label: starts with '&' if it's a label or it's an integer if it's a number
+  GLOBAL_DIRECTIVE = %{IDENT}               // Global directives start with '%'
+  BOOL = true|false                         // A logical vaoue true/false
+  VARIABLE = \${IDENT}                      // A variable which points to a state
+  RANGE = [-+]?\d+\s*\.\.\s*[-+]?\d+        // A numeric range token, used when defining transitions
+  REGEXP = \/(?:\/|[^\r\n]*?)\/             // A regular expression token
+  EPSILON = [€$]                            // An epsilon trasition token
+  EOF = eof                                 // An EOF transition token
+  ERROR = error                             // A trasition in case of error
+  SQSTR = \'(?:\\.|[^\\\\\'])*?\'           // Single-quoted string, with escapes
+  DQSTR = \"(?:\\.|[^\\\\\"])*?\"           // Double-quoted string, with escapes
+  NUMBER = [-+]?(?:\d+\.\d*|\.\d+|\d+)      // An integer or decimal number, with or without sign
+[/TOKENS]
+/*
+  This is the global code. It goes verbatim into the output code, so be careful what you insert here. The only special
+thing to know is that this code appears just *below* the automata class definition.
+*/
+[GLOBALS]
+
+[/GLOBALS]
+/*
+  The automata definition itself. This is the "meat" of the automata. In this file, we are going to define the automata
+which compiles AutodefPHP into PHP.
+*/
+[TRANSITIONS]
+0:
+  '[' SPCZ 'AUTOMATA' SPCZ ':' IDENT SPCZ ']' -> &automataStart {
+    $this->setVariable('global',''); // create an internal variable to store global definitions
+    $this->setVariable('events',''); // create an internal variable to store event definitions
+    $this->setVariable('tokens',''); // create an internal variable to store token definitions
+    $this->setVariable('states',''); // create an internal variable to store state definitions
+    $this->setVariable('options',''); // create an internal variable to store option definitions
+    $this->setVariable('automataName',$this->tokenByPosition(5)); // use the value of the 6th token (IDENT) as the automata's name
+  }
+automataStart:
+  '[/' SPCZ 'AUTOMATA' SPCZ ':' IDENT SPCZ ']' -> &automataEnd {
+    $global=$this->getVariable('global');
+    $events=$this->getVariable('events');
+    $tokens=$this->getVariable('tokens');
+    $states=$this->getVariable('states');
+    $options=$this->getVariable('options');
+    $automataName=$this->getVariable('automataName');
+    $this->result=<<<__EOF
+require_once"automata.php"; // this class defines and controls the automata
+{$global}
+{$events}
+class {$automataName}Class extends Automata {
+  protected
+    \$tokens=array(
+      {$tokens}
+    )
+  ;
+
+  private function makeTransitions(){
+    foreach(\$this->states as \$state){
+      switch(\$state){
+        {$states}
+      }
+    }
+  }
+  public function __construct(\$file) {
+    parent::__construct(\$file);
+    \$this->setOptions(
+      array(
+        {$options}
+      )
+    );
+  }
+  public function execute(\$text = ''){
+    \$this->reset();
+    if(\$text||(\$this->inputFile&&is_file(\$this->inputFile)&&is_readable(\$this->inputFile))){
+      \$this->text=!\$text?@file_get_contents(\$this->inputFile):\$text;
+      \$this->len=strlen(\$this->text);
+      \$this->states=array(0); // initial state
+      while(!\$this->isEOF()&&!\$this->isErrorState()){
+        \$this->makeTransitions();
+      }
+    }
+    return \$this->isEndStateReached()?\$this->result:null; // null means no end state reached
+  }
+}
+__EOF;
+  }
+automataEnd:
+  € -> END {
+    // this is it! ;)
+  }
+[/TRANSITIONS]
+/*
+  The events list. The order of execution of a state's code is:
+  
+  1) The ENTER event of the current state if we come from other state, or the REPEAT event if we come from this same state.
+  2) The code included in the transaction list above (enclosed in curly braces).
+  3) The EXIT event of the current state.
+*/
+[EVENTS]
+// -- No events at the moment
+[/EVENTS]
+[/AUTOMATA]

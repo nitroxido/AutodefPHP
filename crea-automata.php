@@ -47,23 +47,26 @@ class CreadorAutomatas{
     $comment=false;
     while($pos<$len){
       $partial=mb_substr($text,$pos,min($len-$pos,1024));
+// echo"Posición $pos -> Parcial:<code>".nl2br(htmlspecialchars($partial))."</code><br/>";
+// if($pos==1931)echo"Modo múltiple: ".mb_internal_encoding()."<br/>";
       $res=null;
       switch(true){
         case preg_match('/^[\r\n\f]+/us',$partial,$res): // bloques de múltiples saltos de línea fuera de cadenas
           $result.="\n"; // dejar sólo este salto de línea
         break;
-        case preg_match('/^'.$slc.'.*?(?:\r\n?|\n\r?|$)/s',$partial,$res): // comentario de una sola línea, eliminar
+        case preg_match('/^'.$slc.'.*?(?:\r\n?|\n\r?|$)/us',$partial,$res): // comentario de una sola línea, eliminar
         case $slca&&preg_match('/^'.$slca.'.*?(?:\r\n?|\n\r?|$)/s',$partial,$res): // comentario de una sola línea alternativo, eliminar
           $result.="\n";
         break;
         case preg_match('/^'.$mlcs.'(?!@)/us',$partial,$res): // comentario multilínea, pero no compilación condicional, así que ignorar las cadenas de su interior
           if(preg_match('/(?<!@)'.$mlce.'|$/us',$partial,$res,PREG_OFFSET_CAPTURE)){ // final de comentario o de archivo (no se admiten anidamientos)
             $newpos=$res[0][1]; // aquí empezó el final de comentario
-            $pos+=$newpos+mb_strlen($res[0][0]); // saltar hasta aquí y el final de comentario también (eliminarlo)
-            $res[0]=''; // y vaciar el resultado, para que no se altere la posición actual
+            $newlen=mb_strlen(substr($partial,0,$newpos)); // cosa curiosa pero que funcione ;)
+            $pos+=$newlen+mb_strlen($res[0][0]);
+            $res[0]='';
           }
         break;
-        case preg_match('/^'.$mlcs.'@(.*)?@'.$mlce.'/s',$partial,$res): // compilación condicional, así que respetarla
+        case preg_match('/^'.$mlcs.'@(.*)?@'.$mlce.'/us',$partial,$res): // compilación condicional, así que respetarla
         case preg_match('/^\/(?:(?:\\\\.|[^\s\\\\])+?)\//us',$partial,$res): // expresiones regulares de JS, respetarlas
         case preg_match('/^(?:\\\\)+[\'\"]/us',$partial,$res): // comilla escapada, respetarla
         case preg_match('/^((?:\'(?:\\\\.|[^\'])*\')|(?:\"(?:\\\\.|[^\"])*\"))/us',$partial,$res): // cadenas fuera de comentarios
@@ -74,7 +77,7 @@ class CreadorAutomatas{
       if($this->TablaLlena($res)){
         $pos+=mb_strlen($res[0]);
       }else{
-        $result.=$partial[0]; // si no ha habido coincidencia, tomar el caracter tal y como viene
+        $result.=mb_substr($partial,0,1); // si no ha habido coincidencia, tomar el caracter tal y como viene
         $pos++;
       }
     }
@@ -136,7 +139,7 @@ class CreadorAutomatas{
     if(preg_match('/^'.$indentRegex.'('.self::TODO_TOKEN.')/s',$texto,$res)){
       $result=$res[1]; // capturar token
       $texto=mb_substr($texto,mb_strlen($res[0])); // recortar texto
-// echo"Encontrado token $result y nos queda por delante :<pre><br/>".htmlspecialchars($texto)."</pre><br/>";
+// echo"Encontrado token ".htmlspecialchars($result)." y nos queda por delante :<pre><br/>".htmlspecialchars($texto)."</pre><br/>";
     }
     return $result;
   }
@@ -144,7 +147,7 @@ class CreadorAutomatas{
     $result=array('','');
     if(preg_match('/^\s*->\s*/',$texto,$res)){ // indicador de transición, así que toca parar
       $texto=mb_substr($texto,mb_strlen($res[0])); // saltarse este trozo de código
-      if(preg_match('/^((?:0|\d+|\&\w+)(?:\s*,\s*(?:0|\d+|\&\w+))*)\s*([;\{]|$)/',$texto,$res)){ // encontramos un estado o lista de estados, y final de línea o inicio de código
+      if(preg_match('/^((?:0|\d+|\&\w+|END)(?:\s*,\s*(?:0|\d+|\&\w+|END))*)\s*([;\{]|$)/',$texto,$res)){ // encontramos un estado o lista de estados, y final de línea o inicio de código
         $masCodigo=$res[2]=='{'; // necesitamos más código
         $estados=preg_split('/\s*,\s*/',$res[1],-1,PREG_SPLIT_NO_EMPTY); // los estados a los que ha transicionado
         $result=array($estados,$masCodigo);
@@ -229,11 +232,11 @@ class CreadorAutomatas{
   private function CapturaEstados($texto){
     $indent=0;
 // echo"Buscando estados en:<pre><br/>".htmlspecialchars($texto)."</pre><br/>";
-    while($texto&&preg_match('/^(0|\d+|\w+)\s*(?:\(\s*(END)\s*\))?:\s*(?:\r\n?|\n\r?|$)+/s',$texto,$res)){ // capturar comienzo de estado, mientras quede código que procesar
+    while($texto&&preg_match('/^(0|\d+|\w+)\s*:\s*(?:\r\n?|\n\r?|$)+/s',$texto,$res)){ // capturar comienzo de estado, mientras quede código que procesar
 // echo"Estado encontrado:<br/><pre>".htmlspecialchars(print_r($res,true))."</pre><br/>";
       $nombreEstado=$res[1]; // nombre del estado
-      $estadoFinal=!empty($res[2]); // ¿es estado final?
       $texto=mb_substr($texto,mb_strlen($res[0])); // resto del código
+// echo"Texto restante antes de capturar transiciones:<pre>".htmlspecialchars($texto)."</pre><br/>";
       $transiciones=array(); // las transiciones que contiene este estado
       if(preg_match('/^\s+/s',$texto,$res)){ // si hay espacios al comienzo (obligatorio)
         $indent=mb_strlen($res[0]); // indentación mínima a partir de ahora
@@ -244,7 +247,7 @@ class CreadorAutomatas{
       }else{ // no hay espacios, final de definición de estado
         $indent=0; // restaurar indentación
       }
-      $this->estados[$nombreEstado]=array('final'=>$estadoFinal,'trans'=>$transiciones); // guardar estado anterior
+      $this->estados[$nombreEstado]=array('final'=>false,'trans'=>$transiciones); // guardar estado anterior
     }
   }
   private function CapuraEventos($texto){
@@ -253,25 +256,20 @@ class CreadorAutomatas{
       $tipoEvento=$res[2];
       $codigo=$res[3];
       $texto=mb_substr($texto,mb_strlen($res[0])); // resto del código
-      if(isset($this->estados[$nombreEstado])){
+      // if(isset($this->estados[$nombreEstado])){
         if(!preg_match('/^\s*\{\s*\}\s*$/',$codigo))$this->eventos[$nombreEstado][$tipoEvento]=$codigo; // si no es vacío, meter código aquí
-      }else $this->DarError("El estado '$nombreEstado' no está definido en el autómata");
+      // }else $this->DarError("El estado '$nombreEstado' no está definido en el autómata");
     }
   }
-  
+
   private function MuestraEventos(){
     $result='';
     foreach($this->eventos as $estado=>$datos){
       foreach($datos as $tipoEvento=>$codigo){
-        // $result.=<<<__EOF
-// function f_$estado_$tipoEvento {
-  // $codigo
-// }
-// __EOF;
         $result.=<<<__EOF
-  private function f_$estado_$tipoEvento {
-    $codigo
-  }
+function f_$estado_$tipoEvento {
+  $codigo
+}
 __EOF;
       }
     }
@@ -289,8 +287,6 @@ __EOF;
   private function MuestraTokens(){
     $result='';
     foreach($this->tokens as $nombre=>$regex){
-      // $regex=preg_quote($regex,"'");
-      // $regex=preg_replace('/\'/', '\\\'', $regex);
       $result.=<<<__EOF
 '$nombre'=>'$regex',
 __EOF;
@@ -311,7 +307,7 @@ __EOF;
         $result="'$val'";
       break;
       case preg_match('/^[A-Z]\w*$/s',$val): // tokens
-        $result="'/".$this->tokens[$val]."/'"; // convertirlo en expresión regular
+        $result="'$val'";
       break;
       case preg_match('/^([\'\"])/s',$val,$res): // cadenas
         $dq=$res[1]=='"'; // dobles comillas
@@ -353,6 +349,7 @@ __EOF;
   private function EstadoACodigo($val){
     $result="'$val'"; // por defecto
     if(preg_match('/^\&(\w+)$/',$val,$res))$result="'{$res[1]}'";
+    elseif($val=='END')$result=$val;
     return $result;
   }
   private function PreprocesaCodigo($codigo,$estados){
@@ -392,29 +389,29 @@ __EOF;
       $states=join(",",array_map(array($this,'EstadoACodigo'),$estados)); // lista de estados
       $state=$this->EstadoACodigo($estados[0]);
       if($multi){ // plantilla de transiciones múltiples
-        $result.="\ncase \${$this->nombreAutomata}->multiTokenMatch(array(";
+        $result.="\ncase \$this->multiTokenMatch(array(";
         for($j=0,$maxj=count($tokens);$j<$maxj;$j++){
           $tipo=$this->TipoDeToken($tokens[$j]);
-          $result.="array(".$this->TokenACodigo($tokens[$j]).",'".($tipo=='token'?'regexp':$tipo)."'),"; // poner el "token" como "regexp"
+          $result.="array(".$this->TokenACodigo($tokens[$j]).",'".($tipo)."'),"; // poner el "token" como "regexp"
         }
         $result.="),".($serial?'true':'false')."):\n";
-        $result.="$code\n\${$this->nombreAutomata}->gotoStates(array($states));\nbreak;\n";
+        $result.="$code\n\$this->gotoStates(array($states));\nbreak;\n";
       }else{ // plantillas de transiciones sencillas
         $token=&$trans['token']; // atajo
         switch(true){
           case 'error'==$token: // transición de error
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->isErrorState():
+case \$this->isErrorState():
   $code
-  \${$this->nombreAutomata}->gotoState('$state');
+  \$this->gotoState('$state');
 break;
 __EOF;
           break;
           case 'eof'==$token: // transición de fin de archivo
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->isEOF():
+case \$this->isEOF():
   $code
-  \${$this->nombreAutomata}->gotoState('$state');
+  \$this->gotoState('$state');
 break;
 __EOF;
           break;
@@ -422,55 +419,55 @@ __EOF;
             $result.=<<<__EOF
 case true:
   $code
-  \${$this->nombreAutomata}->gotoState('$state');
+  \$this->gotoStateEpsilon('$state');
 break;
 __EOF;
           break;
           case preg_match('/^([A-Z]\w*)$/',$token,$res): // transición por token
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->tokenMatch('$res[1]'):
+case \$this->tokenMatch('$res[1]'):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
           case preg_match('/^(\/(?:\/|[^\r\n])+?\/)$/',$token,$res): // transición por regexp
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->regexpMatch('$res[1]'):
+case \$this->regexpMatch('$res[1]'):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
           case preg_match('/^(\'(?:\\.|[^\\\'])*?\')$/',$token,$res): // transición por cadena comilla simple
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->stringMatch("$res[1]","'"):
+case \$this->stringMatch("$res[1]","'"):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
           case preg_match('/^(\"(?:\\.|[^\\\"])*?\")$/',$token,$res): // transición por cadena comilla doble
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->stringMatch('$res[1]','"'):
+case \$this->stringMatch('$res[1]','"'):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
           case preg_match('/^([-+]?\d+)\s*\.\.\s*([-+]?\d+)$/',$token,$res): // transición por rango
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->rangeMatch($res[1],$res[2]):
+case \$this->rangeMatch($res[1],$res[2]):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
           case preg_match('/^\$([A-Za-z_]\w*)$/',$token,$res): // transición por variable
             $result.=<<<__EOF
-case \${$this->nombreAutomata}->variableMatch('$res[1]'):
+case \$this->variableMatch('$res[1]'):
   $code
-  \${$this->nombreAutomata}->gotoStates(array($states));
+  \$this->gotoStates(array($states));
 break;
 __EOF;
           break;
@@ -486,6 +483,7 @@ __EOF;
       $transiciones=$datos['trans'];
       if(count($transiciones)){
         ob_start();
+/*
 ?>
 case '<?=$nombre?>':
   if(<?=$final?'true':'false'?>)$<?=$this->nombreAutomata?>->atEnd();
@@ -498,7 +496,22 @@ case '<?=$nombre?>':
     break;
   }
   if(!$<?=$this->nombreAutomata?>->isErrorState())$<?=$this->nombreAutomata?>->doExit($state); // eventos EXIT si no hubo error
-break;  
+break;
+*/
+?>
+case '<?=$nombre?>':
+  if(<?=$final?'true':'false'?>)$this->atEnd();
+  if($this->isInState($state))$this->doRepeat($state); // eventos REPEAT
+  else $this->doEnter($state); // eventos ENTER
+  $this->clearTokens(); // eliminar tokens encontrados
+  switch(true){
+    <?=$this->MuestraTransiciones($transiciones)?>
+    default:
+      $this->error();
+    break;
+  }
+  if(!$this->isErrorState())$this->doExit($state); // eventos EXIT si no hubo error
+break;
 <?
         $result.=ob_get_clean();
       }else{
@@ -549,15 +562,16 @@ function exec<?=$this->nombreAutomata?>($file){
     $result="<?\n";
     ob_start();
 ?>
-require_once"automata.php"; // la clase que define y controla el autómata
+require_once"automata.php"; // this class defines and controls the automata
 <?=$this->codigoGlobal?>
+<?=$this->MuestraEventos()?>
 class <?=$this->nombreAutomata?>Class extends Automata {
   protected
     $tokens=array(
       <?=$this->MuestraTokens()?>
     )
   ;
-  
+
   private function makeTransitions(){
     foreach($this->states as $state){
       switch($state){
@@ -565,7 +579,6 @@ class <?=$this->nombreAutomata?>Class extends Automata {
       }
     }
   }
-  <?=$this->MuestraEventos()?>
   public function __construct($file) {
     parent::__construct($file);
     $this->setOptions(
@@ -579,17 +592,17 @@ class <?=$this->nombreAutomata?>Class extends Automata {
     if($text||($this->inputFile&&is_file($this->inputFile)&&is_readable($this->inputFile))){
       $this->text=!$text?@file_get_contents($this->inputFile):$text;
       $this->len=strlen($this->text);
-      $this->states=array(0); // estado inicial
+      $this->states=array(0); // initial state
       while(!$this->isEOF()&&!$this->isErrorState()){
         $this->makeTransitions();
       }
     }
-    return $this->isEndStateReached(); 
+    return $this->isEndStateReached()?$this->result:null; // null means no end state reached
   }
 }
-// - Ejemplos a utilizar sólo durante el tiempo de desarrollo
-$automata = new <?=$this->nombreAutomata?>Class('aventura.ave');
-echo"Autómata:<pre>".print_r($automata,true)."</pre>";
+// - Example of how to use the automata class
+$automata = new <?=$this->nombreAutomata?>Class('autodef-en.autodef.def');
+echo "Result: ".$automata->execute()."<br/>"
 <?
     $result.=ob_get_clean();
     $result.="?>";
@@ -632,6 +645,7 @@ echo"Autómata:<pre>".print_r($automata,true)."</pre>";
   }
 
   public function __construct(){
+    mb_internal_encoding('UTF-8');
   }
   public function GeneraAutomata($name){
     $result=false;

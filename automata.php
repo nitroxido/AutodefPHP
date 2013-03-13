@@ -1,19 +1,19 @@
 <?
 class Automata{
-  const ERROR_STATE = -1; // estado de error
-  const LITERAL_TOKEN = 0; // token literal
-  const DQSTRING_TOKEN = 1; // token cadena entre comillas dobles
-  const SQSTRING_TOKEN = 2; // token cadena entre comillas simples
-  const RANGE_TOKEN = 3; // token rango
-  const REGEXP_TOKEN = 4; // token expresión regular
-  const NUMERIC_TOKEN = 4; // token numérico
+  const ERROR_STATE = -1; // state of error
+  const LITERAL_TOKEN = 0; // a literal token
+  const DQSTRING_TOKEN = 1; // double-quoted string token
+  const SQSTRING_TOKEN = 2; // single-quoted string token
+  const RANGE_TOKEN = 3; // range token
+  const REGEXP_TOKEN = 4; // regexp token
+  const NUMERIC_TOKEN = 4; // numeric token
   protected $ajustes=array()
-    ,$estados=array() // estados durante el funcionamiento del autómata
-    ,$nuevosEstados=array() // nuevos estados durante el funcionamiento del autómata
-    ,$finales=array() // tabla de estados finales
-    ,$variables=array() // tabla de variables internas
+    ,$estados=array() // states while the automata is working
+    ,$nuevosEstados=array() // new states while the automata is working
+    ,$finales=array() // final states table (not used at the moment)
+    ,$variables=array() // internal variables' array
     ,$final=false
-    ,$tokens=array()
+    ,$tokens=array() // token's array
     ,$utf8=true
     ,$inputFile=''
     ,$tokenfunc=null
@@ -25,6 +25,8 @@ class Automata{
     ,$length=0
     ,$partial=''
     ,$text=''
+    ,$foundTokens=array() // found token's array (filled up on each state)
+    ,$result='' // the result you must fill up (or not)
   ;
   public function __set($name,$value){
     if(isset($this->ajustes[$name]))$this->ajustes[$name]=$value; // sólo se sobreescriben las propiedades válidas
@@ -38,6 +40,9 @@ class Automata{
   }
   private function substr($subject,$start,$len=null){
     return is_null($len)?($this->ajustes['utf8']?mb_substr($subject,$start):strlen($subject,$start)):($this->ajustes['utf8']?mb_substr($subject,$start,$len):strlen($subject,$start,$len));
+  }
+  private function strcmp($string1,$string2){
+    return $this->ajustes['ignore_case']?strcasecmp($string1,$string2):strcmp($string1,$string2);
   }
   private function charAt($subject,$pos){
     return $this->substr($subject,$pos,1);
@@ -86,13 +91,6 @@ class Automata{
     if(function_exists($fname))$fname();
   }
   
-  protected function reset(){
-    $this->text=$this->partial='';
-    $this->pos=$this->len=$this->oldPosition=0;
-    $this->res=null;
-    $this->estados=array();
-    $this->final=false;
-  }
   private function initialize(){
     $this->utf8=&$this->ajustes['utf8']; // menos escribir para hacer esta comprobación
     $this->tokenfunc=$this->ajustes['char_mode']?(!is_null($this->ajustes['token_func'])?$this->ajustes['token_func']:null):null; // función de lectura de caracteres
@@ -123,7 +121,21 @@ class Automata{
     }
     return $type;
   }
-  
+
+  protected function reset(){
+    $this->result=$this->text=$this->partial='';
+    $this->pos=$this->len=$this->oldPosition=0;
+    $this->res=null;
+    $this->estados=array();
+    $this->final=false;
+    $this->clearTokens();
+  }
+  protected function clearTokens(){
+    $this->foundTokens=array();
+  }
+  protected function tokenByPosition($pos){
+    return $pos>=0&&$pos<count($this->foundTokens)?$this->foundTokens[$pos]:null;
+  }
   
   public function __construct($fname=''){
     $this->setDefaultOptions();
@@ -186,6 +198,9 @@ class Automata{
   public function gotoState($state){
     $this->estados=array($state);
   }
+  public function gotoStateEpsilon($state){
+    if(!in_array($state,$this->estados))$this->estados[]=$state;
+  }
   public function getVariable($varName){
     return isset($this->variables[$varName])?$this->variables[$varName]:null;
   }
@@ -199,7 +214,10 @@ class Automata{
   public function tokenMatch($token){
     $nextToken=$this->getNextToken(true); // leer el siguiente token sin avanzar
     $ok=$nextToken==$token; // ver si coincide
-    if($ok)$this->getNextToken(); // avanzar si coincide
+    if($ok){
+      $this->getNextToken(); // avanzar si coincide
+      $this->foundTokens[]=$nextToken; // almacenar token
+    }
     return $ok;
   }
   public function regexpMatch($regexp){
@@ -207,6 +225,7 @@ class Automata{
     if(preg_match($this->pregPrefix.$regex.$this->pregSuffix,$this->partial,$res)){
       $ok=true;
       $this->setPos($this->pos+$this->len($res[0])); // avanzar si coincide
+      $this->foundTokens[]=$res[0]; // almacenar token
     }
     return $ok;
   }
@@ -218,8 +237,11 @@ class Automata{
         $this->setPos($this->pos+$this->len($res[0])); // saltar espacios
       }
       $slen=$this->len($string);
-      $ok=$this->len($this->partial)>$slen&&$this->substr($this->partial,0,$slen)==$string; // si coincide por completo
-      if($ok)$this->setPos($this->pos+$slen); // avanzar si coincide
+      $ok=$this->len($this->partial)>$slen&&$this->strcmp($this->substr($this->partial,0,$slen),$string)==0; // si coincide por completo
+      if($ok){
+        $this->foundTokens[]=$this->substr($this->partial,0,$slen); // almacenar token encontrado
+        $this->setPos($this->pos+$slen); // avanzar si coincide
+      }
     }
     return $ok;
   }
@@ -234,14 +256,17 @@ class Automata{
     if(preg_match($this->pregPrefix.'[-+]?(?:\d+(?:\.\d*)?|0?\.\d+)'.$this->pregSuffix,$this->partial,$res)){ // detectar un número cualquiera
       $val=(double)$res[0]; // convertir
       $ok=$min<=$val&&$val<=$max; // ambos inclusive
-      if($ok)$this->setPos($this->pos+$this->len($res[0])); // avanzar si coincide
+      if($ok){
+        $this->foundTokens[]=$res[0]; // almacenar token encontrado
+        $this->setPos($this->pos+$this->len($res[0])); // avanzar si coincide
+      }
     }
     return $ok;
   }
   public function variableMatch($varname){
     $ok=false;
     if(isset($this->variables[$varname])){
-      $value=$this->variables[$varname]; // tomar el valor
+      $value=(string)$this->variables[$varname]; // tomar el valor
       $ok=$this->stringMatch($value,''); // cadena SIN delimitadores
     }
     return $ok;
@@ -250,7 +275,7 @@ class Automata{
     $ok=false;
     $savePos=$this->pos;
     foreach($tokens as $token){
-      list($type,$token)=$token;
+      list($type,$token)=$token; // subdividir el token en tipo y token en sí
       switch($type){
         case'token':
           $ok=$this->tokenMatch($token); // comprobar el token apropiado
@@ -290,18 +315,21 @@ class Automata{
   public function error(){
     $this->estados[]=self::ERROR_STATE;
   }
+  public function setVariable($varName,$val){
+    $this->variables[$varName]=$val;
+  }
   
   public function freeze(){
-    $tmpfile=preg_replace('/^(.*?)\.\w+$/i','.tmp',$this->fname); // archivo temporal
+    $tmpfile=preg_replace('/^(.*?)\.\w+$/i','.tmp',$this->fname); // temporary archive
     $currentState=array('tokens'=>$this->tokens,'ajustes'=>$this->ajustes,'estados'=>$this->estados,'nuevosEstados'=>$this->nuevosEstados,
-      'finales'=>$this->finales,'variables'=>$this->variables);
+      'finales'=>$this->finales,'variables'=>$this->variables,'result'=>$this->result);
 echo"Estado actual:<pre>".htmlspecialchars(print_r($currentState,true))."</pre>";
-    file_put_contents($tmpfile,base64_encode(serialize($currentState))); // volcar el estado actual al archivo
+    file_put_contents($tmpfile,base64_encode(serialize($currentState))); // dump current state to file
   }
   public function unFreeze(){
-    $tmpfile=preg_replace('/^(.*?)\.\w+$/i','.tmp',$this->fname); // archivo temporal
+    $tmpfile=preg_replace('/^(.*?)\.\w+$/i','.tmp',$this->fname); // temporary archive
     if(file_exists($tmpfile)){
-      $newState=unserialize(base64_decode(file_get_contents($tmpfile))); // releer los valores
+      $newState=unserialize(base64_decode(file_get_contents($tmpfile))); // reload state
 echo"Nuevo estado:<pre>".htmlspecialchars(print_r($newState,true))."</pre>";
       $this->tokens=$newState['tokens'];
       $this->ajustes=$newState['ajustes'];
@@ -309,6 +337,7 @@ echo"Nuevo estado:<pre>".htmlspecialchars(print_r($newState,true))."</pre>";
       $this->nuevosEstados=$newState['nuevosEstados'];
       $this->finales=$newState['finales'];
       $this->variables=$newState['variables'];
+      $this->result=$newState['result'];
    }
   }
   public function getCurrentText(){
@@ -321,7 +350,10 @@ echo"Nuevo estado:<pre>".htmlspecialchars(print_r($newState,true))."</pre>";
     return $this->pos;
   }
   public function setCurrentPosition($pos){
-    if(is_numeric($pos)&&$pos>=0&&$pos<$this->length)$this->pos=$pos; // si es posición correcta, asignarla
+    if(is_numeric($pos)&&$pos>=0&&$pos<$this->length){
+      $this->pos=$pos; // change position if it's allowed
+      $this->final=$this->pos==$this->length; // update final indicator
+    }
   }
   public function getCurrentStateStartingPosition(){
     return $this->oldPosition;
